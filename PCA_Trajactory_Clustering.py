@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
-import os, re, math, scipy.io, random
+import os, re, math, scipy.io, random, time
 import seaborn as sns
 from scipy.spatial.distance import directed_hausdorff
 from sklearn.cluster import DBSCAN
