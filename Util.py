@@ -1,63 +1,56 @@
+import os
 import numpy as np
-# kMedoids code is adapted from https://github.com/letiantian/kmedoids
-def kMedoids(D, k, tmax=100):
-    # determine dimensions of distance matrix D
-    m, n = D.shape
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+import matplotlib.collections as mcoll
+import seaborn as sns
+import pandas as pd
 
-    if k > n:
-        raise Exception('too many medoids')
+def colorline(ax, x, y, z=None, linestyle = 'solid', cmap='gist_rainbow', norm=plt.Normalize(0.0, 1.0), linewidth=1, alpha=1.0):
+    # Default colors equally spaced on [0,1]:
+    if z is None:
+        z = np.linspace(0.0, 1.0, len(x))
 
-    # find a set of valid initial cluster medoid indices since we
-    # can't seed different clusters with two points at the same location
-    valid_medoid_inds = set(range(n))
-    invalid_medoid_inds = set([])
-    rs,cs = np.where(D==0)
-    # the rows, cols must be shuffled because we will keep the first duplicate below
-    index_shuf = list(range(len(rs)))
-    np.random.shuffle(index_shuf)
-    rs = rs[index_shuf]
-    cs = cs[index_shuf]
-    for r,c in zip(rs,cs):
-        # if there are two points with a distance of 0...
-        # keep the first one for cluster init
-        if r < c and r not in invalid_medoid_inds:
-            invalid_medoid_inds.add(c)
-    valid_medoid_inds = list(valid_medoid_inds - invalid_medoid_inds)
+    # Special case if a single number:
+    # to check for numerical input -- this is a hack
+    if not hasattr(z, "__iter__"):
+        z = np.array([z])
 
-    if k > len(valid_medoid_inds):
-        raise Exception('too many medoids (after removing {} duplicate points)'.format(
-            len(invalid_medoid_inds)))
+    z = np.asarray(z)
+    segments = make_segments(x, y)
+    lc = mcoll.LineCollection(segments, array=z, cmap=cmap, norm=norm,
+                              linewidth=linewidth, alpha=alpha, linestyle=linestyle)
 
-    # randomly initialize an array of k medoid indices
-    M = np.array(valid_medoid_inds)
-    np.random.shuffle(M)
-    M = np.sort(M[:k])
+    ax.add_collection(lc)
 
-    # create a copy of the array of medoid indices
-    Mnew = np.copy(M)
+    return lc
 
-    # initialize a dictionary to represent clusters
-    C = {}
-    for t in xrange(tmax):
-        # determine clusters, i. e. arrays of data indices
-        J = np.argmin(D[:,M], axis=1)
-        for kappa in range(k):
-            C[kappa] = np.where(J==kappa)[0]
-        # update cluster medoids
-        for kappa in range(k):
-            J = np.mean(D[np.ix_(C[kappa],C[kappa])],axis=1)
-            j = np.argmin(J)
-            Mnew[kappa] = C[kappa][j]
-        np.sort(Mnew)
-        # check for convergence
-        if np.array_equal(M, Mnew):
-            break
-        M = np.copy(Mnew)
-    else:
-        # final update of cluster memberships
-        J = np.argmin(D[:,M], axis=1)
-        for kappa in range(k):
-            C[kappa] = np.where(J==kappa)[0]
+def make_segments(x, y):
+    """
+    Create list of line segments from x and y coordinates, in the correct format
+    for LineCollection: an array of the form numlines x (points per line) x 2 (x
+    and y) array
+    """
 
-    # return results
-    return M, C
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    return segments
+
+def mkdirs(dir_paths):
+    for dir_path in dir_paths:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+
+if __name__ == "__main__":
+    # Data set
+    url = 'mtcars.csv'
+    df = pd.read_csv(url)
+    df = df.set_index('model')
+
+    # Prepare a vector of color mapped to the 'cyl' column
+    my_palette = dict(zip(df.cyl.unique(), ["orange", "yellow", "brown"]))
+    row_colors = df.cyl.map(my_palette)
+
+    # plot
+    sns.clustermap(df, metric="correlation", method="single", cmap="Blues", standard_scale=1, row_colors=row_colors)
