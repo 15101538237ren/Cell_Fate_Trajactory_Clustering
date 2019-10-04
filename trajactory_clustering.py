@@ -10,11 +10,9 @@ import fastcluster as fc
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 # from scipy.spatial.distance import directed_hausdorff
 warnings.filterwarnings('ignore')
-from Util import colorline, mkdirs
+from matplotlib import collections as mcoll
+from Util import mkdirs
 #%matplotlib inline
-
-sns.set()
-plt.rcParams['figure.figsize'] = (12, 12)
 
 # Utility Functions
 color_lst = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -30,12 +28,40 @@ Stages = [8, 10, 11, 12, 13, 14, 16, 18, 20, 22]
 EACH_SUB_FIG_SIZE = 5
 FIGURE_FORMAT = "png"
 
+def make_segments(x, y):
+    """
+    Create list of line segments from x and y coordinates, in the correct format
+    for LineCollection: an array of the form numlines x (points per line) x 2 (x
+    and y) array
+    """
 
-def convert_data_into_np_array(STAGE_DATA_DIR_NAME, INDEX_RANGE, data_save_pick_fp, load=True, number_of_pcs=2, OFF_SET = 0, include_sox_and_t=True):
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    return segments
+
+def colorline(ax, x, y, z=None, linestyle = 'solid', cmap='gist_rainbow', norm=plt.Normalize(0.0, 1.0), linewidth=1, alpha=1.0):
+    # Default colors equally spaced on [0,1]:
+    if z is None:
+        z = np.linspace(0.0, 1.0, len(x))
+
+    # Special case if a single number:
+    # to check for numerical input -- this is a hack
+    if not hasattr(z, "__iter__"):
+        z = np.array([z])
+
+    z = np.asarray(z)
+    segments = make_segments(x, y)
+    lc = mcoll.LineCollection(segments, array=z, cmap=cmap, norm=norm,
+                              linewidth=linewidth, alpha=alpha, linestyle=linestyle)
+
+    ax.add_collection(lc)
+    return lc
+
+def convert_data_into_np_array(STAGE_DATA_DIR_NAME, INDEX_RANGE, data_save_pick_fp, load=True, number_of_pcs=2, OFF_SET = 0, include_sox_and_t=True, Filter=True):
     traj_list = []
     gene_pair_names = []
     sox_t_count = 1 if include_sox_and_t else 0
-    pair_indexs = range(1, INDEX_RANGE + sox_t_count + 1)
+    pair_indexs = []
     if load == False:
         STAGE_DATA_DIR = os.path.join(DATA_DIR, STAGE_DATA_DIR_NAME)
         data_dict = {}
@@ -46,18 +72,20 @@ def convert_data_into_np_array(STAGE_DATA_DIR_NAME, INDEX_RANGE, data_save_pick_
                 if dir_index <= INDEX_RANGE:
                     data_fp = os.path.join(data_dir, "stage_metrics.csv")
                     df = pd.read_csv(data_fp, sep=",", header=0).values
-                    data_dict[dir_index] = {}
-                    data_dict[dir_index]['pair_name'] = '_'.join(re.sub(r'[\[|\]|\\|\'|\s]', '', df[0, 4+OFF_SET]).split(','))
                     pcs = df[:, 7 + OFF_SET: 7 + OFF_SET + number_of_pcs].astype(float)
-                    data_dict[dir_index]['pcs'] = pcs
+                    if (Filter == True and np.sum(pcs[:, 0] > 20) > (len(Stages) / 2.)) or Filter==False:
+                        pair_indexs.append(dir_index)
+                        data_dict[dir_index] = {}
+                        data_dict[dir_index]['pair_name'] = '_'.join(re.sub(r'[\[|\]|\\|\'|\s]', '', df[0, 4+OFF_SET]).split(','))
+                        data_dict[dir_index]['pcs'] = pcs
 
-                    data_dict[dir_index]['prob2d'] = []
-                    for sid, stage in enumerate(Stages):
-                        wild_card_path = os.path.join(data_dir, "Stage_%d_*.mat" % stage)
-                        for filename in glob.glob(wild_card_path):
-                            data_fp = os.path.join(data_dir, filename)
-                            prob2d_arr = sio.loadmat(data_fp)
-                            data_dict[dir_index]['prob2d'].append(prob2d_arr['prob2d'])
+                        data_dict[dir_index]['prob2d'] = []
+                        for sid, stage in enumerate(Stages):
+                            wild_card_path = os.path.join(data_dir, "Stage_%d_*.mat" % stage)
+                            for filename in glob.glob(wild_card_path):
+                                data_fp = os.path.join(data_dir, filename)
+                                prob2d_arr = sio.loadmat(data_fp)
+                                data_dict[dir_index]['prob2d'].append(prob2d_arr['prob2d'])
 
         pairs_name = ["sox2-t"] if include_sox_and_t else []
         for pid, pair in enumerate(pairs_name):
@@ -88,7 +116,7 @@ def convert_data_into_np_array(STAGE_DATA_DIR_NAME, INDEX_RANGE, data_save_pick_
         gene_pair_names.append(data_dict[key]['pair_name'])
         # plt.plot(traj[:, 0], traj[:, 1])
     # plt.show()
-    return [data_dict, traj_list, gene_pair_names]
+    return [pair_indexs, data_dict, traj_list, gene_pair_names]
 
 
 def hausdorff(u, v):
@@ -113,14 +141,16 @@ def calc_distance_matrix(distance_fp, traj_lst):
     np.save(distance_fp, D)
 
 
-def plot_cluster(INDEX_RANGE, traj_lst, cluster_lst, run_name, fig_format="png", color_palette=None, log_transformed=True):
+def plot_cluster(traj_lst, cluster_lst, run_name, fig_format="png", color_palette=None, log_transformed=True, cmap="gist_rainbow"):
     '''
     Plots given trajectories with a color that is specific for every trajectory's own cluster index.
     Outlier trajectories which are specified with -1 in `cluster_lst` are plotted dashed with black color
     '''
     if log_transformed:
-        X_MAX_LIM = Y_MAX_LIM = 50
-        X_MIN_LIM = Y_MIN_LIM = -20
+        X_MAX_LIM = 65
+        Y_MAX_LIM = 40
+        X_MIN_LIM = -17.14
+        Y_MIN_LIM = -22.23
     else:
         X_MAX_LIM = 0.6
         Y_MAX_LIM = 0.15
@@ -140,15 +170,13 @@ def plot_cluster(INDEX_RANGE, traj_lst, cluster_lst, run_name, fig_format="png",
             ax = axs[row][col]
         else:
             ax = axs[cluster]
-        data_index = index + 1
-        if data_index > INDEX_RANGE:
-            colorline(ax, traj[:, 0], traj[:, 1], c_arr, linestyle='dashed')
-            ax.text(0, 0, data_dict[data_index]['pair_name'], color='black')
-        else:
-
-            colorline(ax, traj[:, 0], traj[:, 1], c_arr)
+        colorline(ax, traj[:, 0], traj[:, 1], c_arr, cmap=cmap)
         ax.set_xlim(X_MIN_LIM, X_MAX_LIM)
         ax.set_ylim(Y_MIN_LIM, Y_MAX_LIM)
+        if row==N_ROW - 1:
+            ax.set_xlabel("PCA Component 1")
+        if col == 0:
+            ax.set_ylabel("PCA Component 2")
         if color_palette:
             ax.set_title("cluster %d" % (cluster + 1), backgroundcolor=color_palette[cluster])
         else:
@@ -156,16 +184,17 @@ def plot_cluster(INDEX_RANGE, traj_lst, cluster_lst, run_name, fig_format="png",
     fig_dir = os.path.join(FIGURE_DIR, run_name)
     mkdirs([fig_dir])
     fig_fp = os.path.join(fig_dir, "trajactory_clusters_%d.%s" % (N_CLUSTER, fig_format))
-    plt.savefig(fig_fp, dpi=200)
+    plt.savefig(fig_fp, transparent=True, bbox_inches='tight', pad_inches=0.1, format='png')
     #plt.show()
 
 
-def plot_heatmap_serie_of_each_cluster(data_dict, N_CLUSTER, cluster_lst, run_name, fig_format="png",
+def plot_heatmap_serie_of_each_cluster(data_dict, N_CLUSTER, cluster_lst, passed_pair_indexs, run_name, fig_format="png",
                                        TARGET_CLUSTER_IDs=None):
     '''
     Plots given trajectories with a color that is specific for every trajectory's own cluster index.
     Outlier trajectories which are specified with -1 in `cluster_lst` are plotted dashed with black color
     '''
+    print(N_CLUSTER)
     data_dict = data_dict[0]
     N_COL = 10
     Max_NROW = 5
@@ -179,7 +208,7 @@ def plot_heatmap_serie_of_each_cluster(data_dict, N_CLUSTER, cluster_lst, run_na
     else:
         cluster_ids = range(N_CLUSTER)
     for cluster in cluster_ids:
-        gene_pair_indexs = np.where(cluster_lst == cluster)[0]
+        gene_pair_indexs = passed_pair_indexs[cluster_lst == cluster]
         n_gene_pairs_in_cluster = len(gene_pair_indexs)
         NFIG = int(math.ceil(float(n_gene_pairs_in_cluster) / Max_NROW))
         sub_fig_dir = os.path.join(fig_dir, "cluster_%d" % (cluster + 1))
@@ -219,19 +248,17 @@ def plot_heatmap_serie_of_each_cluster(data_dict, N_CLUSTER, cluster_lst, run_na
                     fig.colorbar(cax, ax=ax)
             plt.savefig(fig_fp, dpi=200)
             print("cluster %d" % (cluster + 1))
-            plt.show()
-
 
 def merge_cluster_by_mannual_assignment(cluster_to_merge_list, labels):
     N_CLUSTER = len(cluster_to_merge_list)
     merged_labels = np.array([label for label in labels])
     for cid, cluster_ids in enumerate(cluster_to_merge_list):
         for cluster_id in cluster_ids:
-            merged_labels[merged_labels == cluster_id] = cid
+            merged_labels[merged_labels == cluster_id - 1] = cid
     return merged_labels
 
+def plot_hierarchical_cluster(df, linkage, color_palette, distance_threshold, label_arr, link_cols, run_name, fig_format="png", label_position=-400):
 
-def plot_hierarchical_cluster(df, linkage, color_palette, distance_threshold, label_arr, run_name, fig_format="png", label_position=-400):
     n_cluster = len(np.unique(label_arr))
     row_colors = df.cluster_label.map(color_palette)
     fig_dir = os.path.join(FIGURE_DIR, run_name)
@@ -250,18 +277,20 @@ def plot_hierarchical_cluster(df, linkage, color_palette, distance_threshold, la
         label_tmp = label_arr[label_arr == lbl_id].shape[0] * 10
         coord = prev_sum + label_tmp * 0.3
         prev_sum += label_tmp
-        plt.text(coord, label_position, "cluster %d" % (lbl_id + 1), rotation=270, backgroundcolor=color_palette[lbl_id])
-    plt.ylim([label_position - 200, linkage[-1, -2]])
+        plt.text(coord, label_position, "cluster %d" % (lbl_id + 1), rotation=45, backgroundcolor=color_palette[lbl_id])
+    plt.ylim([label_position - 20, linkage[-1, -2]])
     fig_fp2 = os.path.join(fig_dir, "cluster_dendrogram_%d_with_leafs.%s" % (n_cluster, fig_format))
     fig2.savefig(fig_fp2, dpi=200)
+
 def get_unique_gene_pairs_names_in_each_cluster(run_name, gene_pairs, cluster_labels_of_gene_pairs):
     output_dir = os.path.join(GENE_PAIR_NAME_DATA, run_name)
+    #output_dir = os.path.join(FIGURE_DIR, run_name)
     mkdirs([output_dir])
 
     unique_gene_names = []
     cluster_labels_of_gene_pairs = np.array(cluster_labels_of_gene_pairs)
     gene_pairs = np.array(gene_pairs)
-    n_cluster = len(np.unique(labels))
+    n_cluster = len(np.unique(cluster_labels_of_gene_pairs))
     for cluster_id in range(n_cluster):
         gene_pairs_in_this_cluster = gene_pairs[cluster_labels_of_gene_pairs == cluster_id]
         all_gene_names_in_this_cluster = []
@@ -273,60 +302,135 @@ def get_unique_gene_pairs_names_in_each_cluster(run_name, gene_pairs, cluster_la
         output_fp = os.path.join(output_dir, "%d.csv" % (cluster_id + 1))
 
         np.savetxt(output_fp, np.array(unique_gene_names_in_this_cluster)[:], delimiter='\n', fmt="%s")
+
+def write_gene_pairs_names_in_each_cluster(run_name, gene_pair_indexs, gene_pair_names, cluster_labels_of_gene_pairs):
+    output_dir = os.path.join(FIGURE_DIR, run_name)
+    mkdirs([output_dir])
+    cluster_labels_of_gene_pairs = np.array(cluster_labels_of_gene_pairs)
+    gene_pairs = np.array(gene_pair_names)
+    n_cluster = len(np.unique(cluster_labels_of_gene_pairs))
+    for cluster_id in range(n_cluster):
+        gene_pairs_in_this_cluster = gene_pairs[cluster_labels_of_gene_pairs == cluster_id]
+        gene_pairs_indexs_in_this_cluster = gene_pair_indexs[cluster_labels_of_gene_pairs == cluster_id]
+        out_arr = np.array([[gene_pairs_indexs_in_this_cluster[idx], gene_pair_name.split("_")[0],gene_pair_name.split("_")[1]] for idx, gene_pair_name in enumerate(gene_pairs_in_this_cluster)])
+        outdir = os.path.join(output_dir,  "cluster_%d" % (cluster_id + 1))
+        mkdirs([outdir])
+        output_fp = os.path.join(outdir, "gene_pair_names_of_cluster_%d.csv"  % (cluster_id + 1))
+        np.savetxt(output_fp, out_arr[:, :], delimiter='\n', fmt="%s,%s,%s")
+
+def filter_cluster(traj_list, labels, pair_indexs, gene_pair_names, threshold = 20):
+    NCLUSTER = len(np.unique(labels))
+    traj_list = np.array(traj_list)
+    labels = np.array(labels)
+    pair_indexs = np.array(pair_indexs)
+    gene_pair_names = np.array(gene_pair_names)
+
+    passed_traj_list = np.array([])
+    passed_labels = np.array([])
+    passed_pair_indexs = np.array([])
+    passed_gene_pair_names = np.array([])
+
+    for cid in np.arange(NCLUSTER):
+        traj_index = np.nonzero(labels == cid)
+        trajs = traj_list[traj_index]
+        n_passed = np.sum(np.array([1 for traj in trajs if np.any(traj > threshold)]))
+        if n_passed > trajs.shape[0]/2.:
+            passed_traj_list = trajs if passed_traj_list.shape[0] == 0 else np.concatenate((passed_traj_list, trajs), axis=0)
+            passed_labels = labels[traj_index] if passed_labels.shape[0] == 0 else np.concatenate((passed_labels, labels[traj_index]), axis=0)
+            passed_pair_indexs = pair_indexs[traj_index] if passed_pair_indexs.shape[0] == 0 else np.concatenate((passed_pair_indexs, pair_indexs[traj_index]), axis=0)
+            passed_gene_pair_names = gene_pair_names[traj_index] if passed_gene_pair_names.shape[0] == 0 else np.concatenate((passed_gene_pair_names, gene_pair_names[traj_index]), axis=0)
+
+    return [passed_traj_list, passed_labels, passed_pair_indexs, passed_gene_pair_names]
+
+
+def fig8_plot_selected_cluster_trajectories(selected_clusters, cluster_labels, traj_lst,
+                                            run_name, N_SAMPLE=4, fig_format='png', cmap="RdBu", color_palette=None):
+    selected_clusters = [item - 1 for item in selected_clusters]
+    N_CLUSTER = len(selected_clusters)
+    plt.rc('axes', linewidth=2., labelsize=10., labelpad=6.)  # length for x tick and padding
+    plt.rc('xtick.major', size=6, pad=3)  # length for x tick and padding
+    plt.rc('ytick.major', size=6, pad=3)  # length for y tick and padding
+    plt.rc('lines', mew=5, lw=4)  # line 'marker edge width' and thickness
+    plt.rc('ytick', labelsize=8)  # ytick label size
+    plt.rc('xtick', labelsize=8)  # xtick label
+    plt.rc('figure', dpi=300)  # Sets rendering resolution to 300
+    plt.rc('lines', markersize=3.1)  # Sets marker size for scatter to reasonable size
+
+    c_arr = np.array([(time_point + 1.) / 10. for time_point in range(10)])
+    for cid, cluster in enumerate(selected_clusters):
+        fig = plt.figure(cid)
+        trajectories = np.array(traj_lst)[np.array(cluster_labels) == cluster]
+        n_sample = N_SAMPLE
+        sampled_indexs = np.random.choice(np.arange(trajectories.shape[0]), min(trajectories.shape[0], n_sample),
+                                          replace=False)
+        sampled_trajectories = trajectories[sampled_indexs]
+
+        for traj in sampled_trajectories:
+            colorline(plt.gca(), traj[:, 0], traj[:, 1], c_arr, cmap=cmap)
+        plt.xlim(-17.14, 65)
+        plt.ylim(-22.23, 40)
+        plt.xlabel("PCA Component 1")
+        plt.ylabel("PCA Component 2")
+        #         plt.title(titles_of_each_cluster[cid])
+        fig_dir = os.path.join(FIGURE_DIR, run_name)
+        mkdirs([fig_dir])
+        fig_fp = os.path.join(fig_dir, "selected_cluster_%d.%s" % ((cluster + 1), fig_format))
+        plt.savefig(fig_fp, transparent=True, bbox_inches='tight', pad_inches=0.1, format='png')
+
 if __name__ == "__main__":
     INDEX_RANGE = 1380
-    stage_data_dir_name = "stage_data_v3"
-    log_transformed=True
-    OFF_SET = 0
+    stage_data_dir_name = "stage_data_log_training"
+    log_transformed = True
+    OFF_SET = 1
     include_sox_and_t = True
 
     run_name = "%d_gene_pairs_%s" % (INDEX_RANGE, stage_data_dir_name)
     pickle_fp = os.path.join(PICKLE_DATA, "%s.pkl" % run_name)
-    label_position = -1250
-    [data_dict, traj_list, gene_pair_names] = convert_data_into_np_array(stage_data_dir_name, INDEX_RANGE, pickle_fp,
-                                                                         load=False, OFF_SET=OFF_SET, include_sox_and_t = include_sox_and_t)
+    [pair_indexs, data_dict, traj_list, gene_pair_names] = convert_data_into_np_array(stage_data_dir_name, INDEX_RANGE, pickle_fp,
+                                                                         load=False, OFF_SET=OFF_SET,
+                                                                         include_sox_and_t=include_sox_and_t, Filter=False)
 
     metric = "directed_hausdorff_plus_pair_wise_euclidean"  # pair_wise_euclidean_distance
     distance_fp = os.path.join(NPY_DATA, "%s_%s.npy" % (run_name, metric))
-    # calc_distance_matrix(distance_fp, traj_list)
-
-
+    calc_distance_matrix(distance_fp, traj_list)
     cm = plt.get_cmap('gist_rainbow')
     p_dist = np.load(distance_fp)
     Z = fc.linkage(p_dist, method="ward")
     distance_threshold = 800 if log_transformed else 10
     labels = fcluster(Z, t=distance_threshold, criterion="distance") - 1
+    [passed_traj_list, _, passed_pair_indexs, passed_gene_pair_names] = filter_cluster(traj_list, labels, pair_indexs, gene_pair_names)
 
-    N_LABEL_CATEGORY = len(np.unique(labels))
-    df = pd.DataFrame(data=p_dist, index=gene_pair_names, columns=gene_pair_names)
-    df['cluster_label'] = labels
+    calc_distance_matrix(distance_fp, passed_traj_list)
+    p_dist = np.load(distance_fp)
+    Z = fc.linkage(p_dist, method="ward")
+    passed_labels = fcluster(Z, t=distance_threshold, criterion="distance") - 1
+
+    label_position = -180
+    CLUSTER_PLOT_CMAP = "gist_rainbow"
+    N_LABEL_CATEGORY = len(np.unique(passed_labels))
+    df = pd.DataFrame(data=p_dist, index=passed_gene_pair_names, columns=passed_gene_pair_names)
+    df['cluster_label'] = passed_labels
     color_palette = dict(
         zip(df.cluster_label.unique(), [cm(1. * i / N_LABEL_CATEGORY) for i in range(N_LABEL_CATEGORY)]))
-    D_leaf_colors = {gid: rgb2hex(color_palette[labels[gid]]) for gid, gpn in enumerate(gene_pair_names)}  #
+    plot_cluster(passed_traj_list, passed_labels, run_name, FIGURE_FORMAT, color_palette,
+                 log_transformed=log_transformed, cmap=CLUSTER_PLOT_CMAP)
+    #
+    write_gene_pairs_names_in_each_cluster(run_name, passed_pair_indexs, passed_gene_pair_names, passed_labels)
+    D_leaf_colors = {gid: rgb2hex(color_palette[passed_labels[gid]]) for gid, gpn in enumerate(passed_gene_pair_names)}  #
     link_cols = {}
     dflt_col = "#808080"
     for i, i12 in enumerate(Z[:, :2].astype(int)):
         c1, c2 = (link_cols[x] if x > len(Z) else D_leaf_colors[x] for x in i12)
         link_cols[i + 1 + len(Z)] = c1 if c1 == c2 else dflt_col
-    # plot_hierarchical_cluster(df, Z, color_palette, distance_threshold, labels, run_name, fig_format="png", label_position=label_position)
-    # plot_cluster(INDEX_RANGE, traj_list, labels, run_name, FIGURE_FORMAT, color_palette, log_transformed=log_transformed)
 
-    clusters_to_merge = [range(1, 24), range(24, 30), range(30, 32), [32],
-                         range(33, 37), range(37, 39)] + [[i] for i in range(39,len(np.unique(labels)))]
-    # Plot the merged clusters
-    merged_labels = merge_cluster_by_mannual_assignment(clusters_to_merge, labels)
-    get_unique_gene_pairs_names_in_each_cluster(run_name, gene_pair_names, merged_labels)
-    #
-    # N_LABEL_CATEGORY = len(np.unique(merged_labels))
-    # df = pd.DataFrame(data=p_dist, index=gene_pair_names, columns=gene_pair_names)
-    # df['cluster_label'] = merged_labels
-    # color_palette = dict(
-    #     zip(df.cluster_label.unique(), [cm(1. * i / N_LABEL_CATEGORY) for i in range(N_LABEL_CATEGORY)]))
-    # D_leaf_colors = {gid: rgb2hex(color_palette[merged_labels[gid]]) for gid, gpn in enumerate(gene_pair_names)}  #
-    # link_cols = {}
-    # dflt_col = "#808080"
-    # for i, i12 in enumerate(Z[:, :2].astype(int)):
-    #     c1, c2 = (link_cols[x] if x > len(Z) else D_leaf_colors[x] for x in i12)
-    #     link_cols[i + 1 + len(Z)] = c1 if c1 == c2 else dflt_col
-    # plot_hierarchical_cluster(df, Z, color_palette, distance_threshold, merged_labels, run_name, fig_format="png")
-    # plot_cluster(INDEX_RANGE, traj_list, merged_labels, run_name, FIGURE_FORMAT, color_palette)
+    plot_hierarchical_cluster(df, Z, color_palette, distance_threshold, passed_labels, link_cols, run_name, fig_format="png",
+                              label_position=label_position)
+    TARGET_CLUSTER_IDs = None
+    plot_heatmap_serie_of_each_cluster([data_dict], N_LABEL_CATEGORY, passed_labels, passed_pair_indexs, run_name, FIGURE_FORMAT,
+                                       TARGET_CLUSTER_IDs)
+    # selected_clusters = [4, 1, 11, 15]
+    # N_SAMPLE = 15
+    # cmap = CLUSTER_PLOT_CMAP
+    # fig8_plot_selected_cluster_trajectories(selected_clusters, passed_labels, passed_traj_list,
+    #                                         run_name=run_name, N_SAMPLE=N_SAMPLE, cmap=cmap, fig_format='png')
+
